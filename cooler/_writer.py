@@ -177,7 +177,7 @@ def prepare_pixels(grp, n_bins, meta, h5opts):
                                **h5opts)
 
 
-def write_pixels(filepath, grouppath, columns, iterable, h5opts, lock):
+def write_pixels(filepath, grouppath, columns, iterable, h5opts, lock, aggregate="sum"):
     """
     Write the non-zero pixel table.
 
@@ -197,12 +197,13 @@ def write_pixels(filepath, grouppath, columns, iterable, h5opts, lock):
         HDF5 filter options.
     lock : multiprocessing.Lock, optional
         Optional lock to synchronize concurrent HDF5 file access.
+    aggregate: str
+        A type of aggregation to use (e.g. "sum" or "max")
 
     """
     nnz = 0
     total = 0
     for i, chunk in enumerate(iterable):
-        
         if isinstance(chunk, pd.DataFrame):
             chunk = {k: v.values for k, v in six.iteritems(chunk)}
         
@@ -221,7 +222,13 @@ def write_pixels(filepath, grouppath, columns, iterable, h5opts, lock):
                     dset.resize((nnz + n,))
                     dset[nnz:nnz+n] = chunk[col]
                 nnz += n
-                total += chunk['count'].sum()
+
+                if aggregate == "sum":
+                    total += chunk['count'].sum()
+                elif aggregate == "max":
+                    total += chunk['count'].max()
+                else:
+                    raise Exception("Unknown aggregation:", aggregate)
                 
                 fw.flush()
 

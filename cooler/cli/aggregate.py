@@ -26,7 +26,7 @@ from .balance import balance as balance_cmd
 QUAD_TILE_SIZE_PIXELS = 256
 
 
-def aggregate(input_uri, output_uri, factor, nproc, chunksize, lock):
+def aggregate(input_uri, output_uri, factor, nproc, chunksize, lock, aggregation):
     c = api.Cooler(input_uri)
     chromsizes = c.chromsizes
     new_binsize = c.binsize * factor
@@ -42,7 +42,8 @@ def aggregate(input_uri, output_uri, factor, nproc, chunksize, lock):
             new_bins,
             chunksize,
             batchsize=nproc,
-            map=pool.map if nproc > 1 else map)
+            map=pool.map if nproc > 1 else map,
+            aggregation=aggrgation)
 
         create(
             output_uri,
@@ -68,7 +69,7 @@ def get_quadtree_depth(chromsizes, binsize):
     return int(math.ceil(np.log2(min_tile_cover)))
 
 
-def multires_aggregate(input_uri, outfile, nproc, chunksize, lock=None):
+def multires_aggregate(input_uri, outfile, nproc, chunksize, lock=None, aggregation='sum'):
     """
     Quad-tree tiling for HiGlass
 
@@ -124,7 +125,8 @@ def multires_aggregate(input_uri, outfile, nproc, chunksize, lock=None):
             factor, 
             nproc, 
             chunksize,
-            lock
+            lock,
+            aggregation
         )
         zoom_levels[zoomLevel] = binsize
 
@@ -192,7 +194,7 @@ def get_multiplier_sequence(resolutions, bases=None):
 
 
 def new_multires_aggregate(input_uris, outfile, resolutions, nproc, chunksize, 
-                           lock=None):
+                           lock=None, aggregation='sum'):
     uris = {}
     bases = set()
     for input_uri in input_uris:
@@ -231,7 +233,8 @@ def new_multires_aggregate(input_uris, outfile, resolutions, nproc, chunksize,
             mult[i], 
             nproc, 
             chunksize,
-            lock
+            lock,
+            aggregation
         )
 
     with h5py.File(outfile, 'r+') as fw:
@@ -317,8 +320,12 @@ def coarsen(cool_uri, factor, nproc, chunksize, out):
 @click.option(
     '--resolutions', '-r',
     help="Comma-separated list of target resolutions")
+@click.option(
+    '--aggregation',
+    default='sum',
+    help="The type of aggregation to use: sum or max")
 def zoomify(cool_uri, nproc, chunksize, balance, balance_args, out,
-            resolutions):
+            resolutions, aggregation):
     """
     Generate zoom levels for HiGlass by recursively generating 2-by-2 element 
     tiled aggregations of the contact matrix until reaching a minimum
@@ -342,7 +349,7 @@ def zoomify(cool_uri, nproc, chunksize, balance, balance_args, out,
     if resolutions is not None:
         resolutions = [int(s.strip()) for s in resolutions.split(',')]
         new_multires_aggregate([cool_uri], outfile, resolutions, nproc, 
-            chunksize, lock=lock)
+            chunksize, lock=lock, aggregation=aggregation)
 
         if balance:
             runner = CliRunner()
@@ -364,7 +371,7 @@ def zoomify(cool_uri, nproc, chunksize, balance, balance_args, out,
 
     else:
         n_zooms, zoom_levels = multires_aggregate(cool_uri, outfile, nproc, 
-            chunksize, lock=lock)
+            chunksize, lock=lock, aggregation=aggregation)
 
         if balance:
             runner = CliRunner()

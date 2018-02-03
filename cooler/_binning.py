@@ -465,12 +465,13 @@ class CoolerAggregator(ContactBinner):
     Aggregate contacts from an existing Cooler file.
 
     """
-    def __init__(self, source_uri, bins, chunksize, batchsize, map=map):
+    def __init__(self, source_uri, bins, chunksize, batchsize, map=map, aggregation='sum'):
         from cooler.api import Cooler
         self._map = map
         self.source_uri = source_uri
         self.chunksize = chunksize
         self.batchsize = batchsize
+        self.aggregation = aggregation
 
         clr = Cooler(source_uri)
         self._size = clr.info['nnz']
@@ -521,7 +522,12 @@ class CoolerAggregator(ContactBinner):
             chunk['bin2_id'] = chrom_binoffset[chrom_id2] + rel_bin2
 
         grouped = chunk.groupby(['bin1_id', 'bin2_id'], sort=False)
-        return grouped['count'].sum().reset_index()
+        if self.aggregation == 'sum':
+            return grouped['count'].sum().reset_index()
+        elif self.aggregation == 'max':
+            return grouped['count'].max().reset_index()
+        else:
+            raise ValueError("Invalid aggregation type: {}".format(self.aggregation))
 
     def aggregate(self, span):
         try:

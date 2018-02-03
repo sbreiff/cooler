@@ -182,4 +182,4 @@ def load(bins_path, pixels_path, cool_path, format, metadata, assembly,
         binner = SparseLoader(pixels_path, bins, chunksize, 
                               field_numbers, field_dtypes, one_based)
 
-    create(cool_path, bins, binner, metadata, assembly, dtypes=field_dtypes)
+    create(cool_path, bins, binner, metadata, assembly, dtypes=field_dtypes, append=True)

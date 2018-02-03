@@ -92,7 +92,8 @@ def is_cooler(filepath, group=None):
 
 
 def create(cool_uri, bins, pixels, metadata=None, assembly=None, dtypes=None,
-           h5opts=None, append=False, lock=None, chromsizes='<deprecated>'):
+           h5opts=None, append=False, lock=None, chromsizes='<deprecated>',
+           aggregate='sum'):
     """
     Create a new Cooler.
 
@@ -131,6 +132,8 @@ def create(cool_uri, bins, pixels, metadata=None, assembly=None, dtypes=None,
         with the same name will be truncated. Default is False.
     lock : multiprocessing.Lock, optional
         Optional lock to control concurrent access to the output file.
+    aggregate: string
+        The function to aggregate multiple values with ("sum", or "max")
 
     Result
     ------
@@ -138,6 +141,7 @@ def create(cool_uri, bins, pixels, metadata=None, assembly=None, dtypes=None,
     group path).
 
     """
+    print("creating")
     file_path, group_path = parse_cooler_uri(cool_uri)
     mode = 'a' if append else 'w'
     if h5opts is None:
@@ -234,7 +238,7 @@ def create(cool_uri, bins, pixels, metadata=None, assembly=None, dtypes=None,
     logger.info('Writing pixels')
     target = posixpath.join(group_path, 'pixels')
     nnz, ncontacts = write_pixels(
-        file_path, target, meta.columns, iterable, h5opts, lock)
+        file_path, target, meta.columns, iterable, h5opts, lock, aggregate)
 
     # Write indexes
     with h5py.File(file_path, 'r+') as f:
