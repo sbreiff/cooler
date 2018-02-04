@@ -695,6 +695,9 @@ def streaming_load_contact_matrix(inpath, outpath, bins, chunksize, binsize,
                 .rename(columns={'bin1': 'bin1_id', 
                                  'bin2': 'bin2_id'}))
         
+        idx = df['bin1_id'] > df['bin2_id']
+        df.loc[idx, ['bin1_id', 'bin2_id']] = df.loc[idx, ['bin2_id', 'bin1_id']].values
+
         # ensure output is sorted
         df = (df[out_columns]
                 .sort_values(['bin1_id', 'bin2_id']))
