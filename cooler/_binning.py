@@ -23,7 +23,7 @@ import h5py
 
 from . import get_logger
 from .util import rlencode, get_binsize, parse_region
-from .io import parse_cooler_uri
+from .io import parse_cooler_uri, create
 from .tools import lock, partition
 
 
@@ -623,6 +623,96 @@ class CoolerMerger(ContactBinner):
             lo = hi
             starts = stops
 
+
+def streaming_load_contact_matrix(inpath, outpath, bins, chunksize, binsize, 
+        chromsizes, count_as_float=False, 
+        read_options=None, sep='\t', **kwargs):
+    """
+    Load any flat contact matrix file into a cooler.
+    
+    Parameters
+    ----------
+    filepath : str
+        Path to the file
+    outpath : str
+        Cooler URI
+    bins : data frame
+        bin table
+    chunksize : int
+        Number of lines to process to generate each temp file
+    """
+    import pandas as pd
+    import tempfile as tf
+
+    if read_options is None:
+        read_options = {}
+
+    fields = [('chrom1', object),
+          ('start1', int),
+          ('end1', int),
+          ('chrom2', object),
+          ('start2', int),
+          ('end2', int),
+          ('count', float if count_as_float else int)]
+
+    print('dtypes', [np.dtype(f[1]) for f in fields])
+    
+    reader = pd.read_csv(
+        inpath, 
+        iterator=True, 
+        names=[f[0] for f in fields],
+        dtype=dict(fields),
+        sep=sep,
+        **read_options)
+    
+    reader.chunksize = chunksize
+    gs = GenomeSegmentation(chromsizes, bins)
+    bins =gs.bins.copy()
+    bins['chrom'] = bins['chrom'].astype(object)
+    bins['bin'] = bins.index
+    out_columns = ['bin1_id', 'bin2_id', 'count' ]
+    binsize = binsize
+    
+    temp_files = []
+    for df in reader:
+        # check for flips XXX - TODO: just flip everything
+        idmap = gs.idmap
+        chrom1_ids = df['chrom1'].apply(idmap.__getitem__)
+        chrom2_ids = df['chrom2'].apply(idmap.__getitem__)
+        assert np.all(chrom1_ids <= chrom2_ids)
+        
+           # print("df.head:", df.head())
+        print("bins:", bins.head())
+
+        # assign bin IDs from bin table
+        df = (df.merge(bins, 
+                       left_on=['chrom1', 'start1', 'end1'], 
+                       right_on=['chrom', 'start', 'end'])
+                .merge(bins, 
+                       left_on=['chrom2', 'start2', 'end2'], 
+                       right_on=['chrom', 'start', 'end'], 
+                       suffixes=('1', '2'))
+                .rename(columns={'bin1': 'bin1_id', 
+                                 'bin2': 'bin2_id'}))
+        
+        # ensure output is sorted
+        df = (df[out_columns]
+                .sort_values(['bin1_id', 'bin2_id']))
+        
+        tf = tf.NamedTemporaryFile(suffix='.cool')
+        temp_files.append(tf)
+
+        print('Creating', tf.name)
+        #pixels = StreamingLoader(bins, reader, chunksize=chunksize, binsize=binsize)
+        print("pixels")
+        create(tf.name, bins, df)
+        print("flal")
+
+
+    print('Merging...')
+    from cooler.api import Cooler
+    pixels = CoolerMerger([Cooler(tf.name) for tf in temp_files], chunksize)
+    create(outpath, bins, pixels, **kwargs)
 
 class BedGraph2DLoader(ContactBinner):
     """

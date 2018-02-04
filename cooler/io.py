@@ -369,7 +369,8 @@ def append(cool_uri, table, data, chunked=False, force=False, h5opts=None,
 # Exports
 from ._binning import (ContactBinner, HDF5Aggregator, TabixAggregator,
                        PairixAggregator, CoolerAggregator, CoolerMerger,
-                       SparseLoader, BedGraph2DLoader, ArrayLoader)
+                       SparseLoader, BedGraph2DLoader, ArrayLoader, 
+                       streaming_load_contact_matrix)
 
 from ._writer import (write_chroms, write_bins, prepare_pixels, write_pixels, 
                       write_indexes, write_info, index_bins, index_pixels, 

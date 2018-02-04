@@ -11,7 +11,7 @@ import h5py
 import click
 from . import cli
 from .. import util
-from ..io import create, parse_cooler_uri, SparseLoader, BedGraph2DLoader
+from ..io import create, parse_cooler_uri, SparseLoader, BedGraph2DLoader, streaming_load_contact_matrix
 
 
 # TODO: support dense text or memmapped binary/npy?
@@ -24,6 +24,9 @@ def _validate_fieldnum(ctx, param, value):
 
 def _parse_bins(arg):
     # Provided chromsizes and binsize
+    # binsize may not be provided if concrete bins are returned
+    binsize = None
+
     if ":" in arg:
         chromsizes_file, binsize = arg.split(":")
         if not op.exists(chromsizes_file):
@@ -62,7 +65,7 @@ def _parse_bins(arg):
             'Expected BINS to be either <Path to bins file> or '
             '<Path to chromsizes file>:<binsize in bp>.')
 
-    return chromsizes, bins
+    return chromsizes, bins, binsize
 
 
 @cli.command()
@@ -80,8 +83,10 @@ def _parse_bins(arg):
     help="'coo' refers to a tab-delimited sparse triplet file "
          "(bin1, bin2, count). "
          "'bg2' refers to a 2D bedGraph-like file "
+         "(chrom1, start1, end1, chrom2, start2, end2, count)."
+         "streaming refers to streaming loading of a 2D bedGraph-like file "
          "(chrom1, start1, end1, chrom2, start2, end2, count).",
-    type=click.Choice(['coo', 'bg2']),
+    type=click.Choice(['coo', 'bg2', 'streaming']),
     required=True)
 @click.option(
     "--metadata",
@@ -155,7 +160,7 @@ def load(bins_path, pixels_path, cool_path, format, metadata, assembly,
     COOL_PATH : Output COOL file path
 
     """
-    chromsizes, bins = _parse_bins(bins_path)
+    chromsizes, bins, binsize = _parse_bins(bins_path)
 
     # User-supplied JSON file
     if metadata is not None:
@@ -174,6 +179,14 @@ def load(bins_path, pixels_path, cool_path, format, metadata, assembly,
 
     if count_as_float:
         field_dtypes['count'] = float
+
+
+    if format == 'streaming':
+        if binsize is None:
+            raise Exception("Bins need to be provided as chromsizes:binsize pairs for streaming loading.")
+        streaming_load_contact_matrix(pixels_path, cool_path, bins,
+                chunksize, binsize, chromsizes, count_as_float)
+        return
 
     if format == 'bg2':
         binner = BedGraph2DLoader(pixels_path, chromsizes, bins, 

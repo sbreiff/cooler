@@ -43,7 +43,7 @@ def aggregate(input_uri, output_uri, factor, nproc, chunksize, lock, aggregation
             chunksize,
             batchsize=nproc,
             map=pool.map if nproc > 1 else map,
-            aggregation=aggrgation)
+            aggregation=aggregation)
 
         create(
             output_uri,
