@@ -642,7 +642,7 @@ def streaming_load_contact_matrix(inpath, outpath, bins, chunksize, binsize,
         Number of lines to process to generate each temp file
     """
     import pandas as pd
-    import tempfile as tf
+    import tempfile as tempfile
 
     if read_options is None:
         read_options = {}
@@ -702,7 +702,7 @@ def streaming_load_contact_matrix(inpath, outpath, bins, chunksize, binsize,
         df = (df[out_columns]
                 .sort_values(['bin1_id', 'bin2_id']))
         
-        tf = tf.NamedTemporaryFile(suffix='.cool')
+        tf = tempfile.NamedTemporaryFile(suffix='.cool')
         temp_files.append(tf)
 
         print('Creating', tf.name)
