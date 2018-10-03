@@ -148,7 +148,7 @@ def write_bins(grp, bins, chromnames, h5opts, chrom_as_enum=True):
 
 def prepare_pixels(grp, n_bins, columns, dtypes, h5opts):
     columns = list(columns)
-    max_size = n_bins * (n_bins - 1) // 2 + n_bins
+    max_size = n_bins * n_bins  #(n_bins - 1) // 2 + n_bins
     init_size = min(5 * n_bins, max_size)
     grp.create_dataset('bin1_id',
                        dtype=dtypes.get('bin1_id', BIN_DTYPE),
