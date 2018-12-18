@@ -385,6 +385,8 @@ def aggregate_records(sort=True, agg=None, rename=None):
         agg['bin1_id'] = 'count'  # count ignores NaN for that column
         rename = {}
         rename['bin1_id'] = 'count'
+    elif 'count' in agg.keys():
+        rename['count'] = 'count'
 
     return partial(_aggregate_records, sort=sort, agg=agg, rename=rename)
 
