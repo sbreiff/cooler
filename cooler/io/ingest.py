@@ -380,12 +380,15 @@ def _aggregate_records(chunk, sort, agg, rename):
 
 
 def aggregate_records(sort=True, agg=None, rename=None):
+    print(agg)
     if agg is None and rename is None:
         agg = {}
         agg['bin1_id'] = 'count'  # count ignores NaN for that column
         rename = {}
         rename['bin1_id'] = 'count'
-    elif 'count' in agg.keys():
+    else:
+        rename = {}
+    if 'count' in agg.keys():
         rename['count'] = 'count'
 
     return partial(_aggregate_records, sort=sort, agg=agg, rename=rename)
