@@ -12,66 +12,27 @@ import numpy as np
 import pandas as pd
 import h5py
 
-import click
+from ._util import parse_bins, parse_kv_list_param, parse_field_param
 from . import cli, get_logger
-from ._util import _parse_bins
+import click
+
 from .. import util
-from ..io import (
+from ..create import (
     create, create_from_unordered,
     sanitize_records, aggregate_records,
-    TabixAggregator, HDF5Aggregator, PairixAggregator
+    TabixAggregator, HDF5Aggregator, PairixAggregator,
 )
 
 
 @cli.group()
 def cload():
     """
-    Create a Cooler from a sorted list of contacts and a list of genomic bins.
+    Create a cooler from genomic pairs and bins.
+
     Choose a subcommand based on the format of the input contact list.
 
     """
     pass
-
-
-def _parse_field_params(args):
-    extra_fields = []
-    bad_param = False
-    for arg in args:
-
-        parts = arg.split(',')
-        if len(parts) == 1 or len(parts) > 4:
-            bad_param = True
-        else:
-            name = parts[0]
-            try:
-                number = int(parts[1]) - 1
-            except ValueError:
-                bad_param = True
-
-            if number < 0:
-                raise click.BadParameter(
-                    "Field numbers are assumed to be 1-based.")
-
-            if len(parts) >= 3:
-                dtype = np.dtype(parts[2])
-            else:
-                dtype = None
-
-            if len(parts) == 4:
-                agg = parts[3]
-            else:
-                agg = None
-
-        if bad_param:
-            raise click.BadParameter(
-                "Expected '--field {{name}},{{number}}' "
-                "or '--field {{name}},{{number}},{{dtype}}' "
-                "or '--field {{name}},{{number}},{{dtype}},{{agg}}'; "
-                "got '{}'".format(arg))
-
-        extra_fields.append((name, number, dtype, agg))
-
-    return extra_fields
 
 
 def register_subcommand(func):
@@ -103,6 +64,7 @@ def add_arg_help(func):
     """BINS : One of the following
 
         <TEXT:INTEGER> : 1. Path to a chromsizes file, 2. Bin size in bp
+
         <TEXT> : Path to BED file defining the genomic bin segmentation.
 
     PAIRS_PATH : Path to contacts (i.e. read pairs) file.
@@ -129,7 +91,7 @@ def hiclib(bins, pairs_path, cool_path, metadata, assembly, chunksize):
 
     """
 
-    chromsizes, bins = _parse_bins(bins)
+    chromsizes, bins = parse_bins(bins)
 
     if metadata is not None:
         with open(metadata, 'r') as f:
@@ -185,7 +147,7 @@ def tabix(bins, pairs_path, cool_path, metadata, assembly, nproc, zero_based, ma
 
     """
     logger = get_logger(__name__)
-    chromsizes, bins = _parse_bins(bins)
+    chromsizes, bins = parse_bins(bins)
 
     if metadata is not None:
         with open(metadata, 'r') as f:
@@ -205,7 +167,7 @@ def tabix(bins, pairs_path, cool_path, metadata, assembly, nproc, zero_based, ma
             opts['P2'] = kwargs['pos2'] - 1
         iterator = TabixAggregator(pairs_path, chromsizes, bins, map=map,
             is_one_based=(not zero_based), n_chunks=max_split, **opts)
-        create(cool_path, bins, iterator, metadata, assembly)
+        create(cool_path, bins, iterator, metadata=metadata, assembly=assembly)
     finally:
         if nproc > 1:
             pool.close()
@@ -246,7 +208,7 @@ def pairix(bins, pairs_path, cool_path, metadata, assembly, nproc, zero_based, m
 
     """
     logger = get_logger(__name__)
-    chromsizes, bins = _parse_bins(bins)
+    chromsizes, bins = parse_bins(bins)
 
     if metadata is not None:
         with open(metadata, 'r') as f:
@@ -261,7 +223,7 @@ def pairix(bins, pairs_path, cool_path, metadata, assembly, nproc, zero_based, m
             map = six.moves.map
         iterator = PairixAggregator(pairs_path, chromsizes, bins, map=map,
             is_one_based=(not zero_based), n_chunks=max_split)
-        create(cool_path, bins, iterator, metadata, assembly)
+        create(cool_path, bins, iterator, metadata=metadata, assembly=assembly)
     finally:
         if nproc > 1:
             pool.close()
@@ -273,22 +235,22 @@ def pairix(bins, pairs_path, cool_path, metadata, assembly, nproc, zero_based, m
     "--chrom1", "-c1",
     help="chrom1 field number (one-based)",
     type=int,
-    required=True)  #default=1)
+    required=True)
 @click.option(
     "--pos1", "-p1",
     help="pos1 field number (one-based)",
     type=int,
-    required=True)  #default=2)
+    required=True)
 @click.option(
     "--chrom2", "-c2",
     help="chrom2 field number (one-based)",
     type=int,
-    required=True)  #default=4)
+    required=True)
 @click.option(
     "--pos2", "-p2",
     help="pos2 field number (one-based)",
     type=int,
-    required=True)  #default=5)
+    required=True)
 @click.option(
     "--chunksize",
     help="Number of input lines to load at a time",
@@ -307,6 +269,12 @@ def pairix(bins, pairs_path, cool_path, metadata, assembly, nproc, zero_based, m
     show_default=True,
     help="Comment character that indicates lines to ignore.")
 @click.option(
+    "--no-symmetric-storage", "-N",
+    help="Create a square matrix without implicit symmetry. "
+         "This allows for distinct upper- and lower-triangle values",
+    is_flag=True,
+    default=False)
+@click.option(
     "--symmetric-input",
     type=click.Choice(['unique', 'duplex']),
     default='unique',
@@ -321,21 +289,22 @@ def pairix(bins, pairs_path, cool_path, metadata, assembly, nproc, zero_based, m
          "distinct, use the `--no-symmetric-storage` option instead. ",
     show_default=True)
 @click.option(
-    "--no-symmetric-storage", "-N",
-    help="Create a square matrix without implicit symmetry. "
-         "This allows for distinct upper- and lower-triangle values",
-    is_flag=True,
-    default=False)
-@click.option(
     "--field",
-    help="Add supplemental value fields or override default field numbers for "
-         "the specified format. Specify as '<name>,<number>' or as "
-         "'<name>,<number>,<dtype>' or as '<name>,<number>,<dtype>,<agg>' to "
-         "enforce a dtype other than `float` or the default for a standard "
-         "column. Field numbers are 1-based. Repeat the `--field` option for "
-         "each additional field. ",
+    help="Specify quantitative input fields to aggregate into value columns "
+         "using the syntax ``<field-name>=<field-number>``. Add "
+         "``,dtype=<dtype>`` to specify the dtype, and ``,agg=<agg>`` to "
+         "specify an aggregation function different from ``sum``. Field "
+         "numbers are 1-based. Specifying 'count' as the target name will "
+         "override the default storage of pair counts. Repeat the ``--field`` "
+         "option for each additional field.",
     type=str,
     multiple=True)
+# @click.option(
+#     "--no-count",
+#     help="Do not store the pair counts. Use this only if you use `--field` to "
+#          "specify at least one input field for aggregation as an alternative.",
+#     is_flag=True,
+#     default=False)
 @click.option(
     "--temp-dir",
     help="Create temporary files in specified directory.",
@@ -343,8 +312,20 @@ def pairix(bins, pairs_path, cool_path, metadata, assembly, nproc, zero_based, m
 @click.option(
     "--no-delete-temp",
     help="Do not delete temporary files when finished.",
-    type=bool,
+    is_flag=True,
     default=False)
+@click.option(
+    "--max-merge",
+    help="Maximum number of chunks to merge before invoking recursive merging",
+    type=int,
+    default=200,
+    show_default=True)
+@click.option(
+    "--storage-options",
+    help="Options to modify the data filter pipeline. Provide as a "
+         "comma-separated list of key-value pairs of the form 'k1=v1,k2=v2,...'. "
+         "See http://docs.h5py.org/en/stable/high/dataset.html#filter-pipeline "
+         "for more details.")
 # @click.option(
 #     "--format", "-f",
 #     help="Preset data format.",
@@ -352,7 +333,7 @@ def pairix(bins, pairs_path, cool_path, metadata, assembly, nproc, zero_based, m
 # --sep
 def pairs(bins, pairs_path, cool_path, metadata, assembly, chunksize,
           zero_based, comment_char, symmetric_input, no_symmetric_storage,
-          field, temp_dir, no_delete_temp, **kwargs):
+          field, temp_dir, no_delete_temp, max_merge, storage_options, **kwargs):
     """
     Bin any text file or stream of pairs.
 
@@ -362,7 +343,7 @@ def pairs(bins, pairs_path, cool_path, metadata, assembly, chunksize,
     {}
 
     """
-    chromsizes, bins = _parse_bins(bins)
+    chromsizes, bins = parse_bins(bins)
 
     use_symmetric_storage = not no_symmetric_storage
     tril_action = None
@@ -380,8 +361,10 @@ def pairs(bins, pairs_path, cool_path, metadata, assembly, chunksize,
         'chrom1', 'pos1', 'chrom2', 'pos2',
     ]
     input_field_dtypes = {
-        'chrom1': str, 'pos1': np.int64,
-        'chrom2': str, 'pos2': np.int64,
+        'chrom1': str,
+        'pos1': np.int64,
+        'chrom2': str,
+        'pos2': np.int64,
     }
     input_field_numbers = {}
     for name in ['chrom1', 'pos1', 'chrom2', 'pos2']:
@@ -391,18 +374,32 @@ def pairs(bins, pairs_path, cool_path, metadata, assembly, chunksize,
                 param_hint=name)
         input_field_numbers[name] = kwargs[name] - 1
 
-    # include any additional value columns
+    # Include input value columns
     output_field_names = []
     output_field_dtypes = {}
     aggregations = {}
     if len(field):
-        extra_fields = _parse_field_params(field)
-        for name, number, dtype, agg in extra_fields:
+        for arg in field:
+            name, colnum, dtype, agg = parse_field_param(arg)
+
+            # Special cases: these do not have input fields.
+            # Omit field number and agg to change standard dtypes.
+            if colnum is None:
+                if (agg is None and dtype is not None
+                        and name in {'bin1_id', 'bin2_id', 'count'}):
+                    output_field_dtypes[name] = dtype
+                    continue
+                else:
+                    raise click.BadParameter(
+                        "A field number is required.", param_hint=arg)
+
             if name not in input_field_names:
                 input_field_names.append(name)
+
+            if name not in output_field_names:
                 output_field_names.append(name)
 
-            input_field_numbers[name] = number
+            input_field_numbers[name] = colnum
 
             if dtype is not None:
                 input_field_dtypes[name] = dtype
@@ -410,7 +407,32 @@ def pairs(bins, pairs_path, cool_path, metadata, assembly, chunksize,
 
             if agg is not None:
                 aggregations[name] = agg
+            else:
+                aggregations[name] = 'sum'
 
+    # # Pairs counts are always produced, unless supressed explicitly
+    # do_count = not no_count
+    # if do_count:
+    #     if 'count' not in output_field_names:
+    #         output_field_names.append('count')  # default dtype and agg
+    # else:
+    #     if not len(output_field_names):
+    #         click.BadParameter(
+    #             "To pass `--no-count`, specify at least one input "
+    #             "value-column using `--field`.")
+    if 'count' not in output_field_names:
+        output_field_names.append('count')
+
+    # Customize the HDF5 filters
+    if storage_options is not None:
+        h5opts = parse_kv_list_param(storage_options)
+        for key in h5opts:
+            if isinstance(h5opts[key], list):
+                h5opts[key] = tuple(h5opts[key])
+    else:
+        h5opts = None
+
+    # Initialize the input stream
     if pairs_path == '-':
         f_in = sys.stdin
     else:
@@ -433,7 +455,7 @@ def pairs(bins, pairs_path, cool_path, metadata, assembly, chunksize,
         tril_action=tril_action,
         sort=True,
         validate=True)
-    aggregate = aggregate_records(agg=aggregations, sort=False)
+    aggregate = aggregate_records(agg=aggregations, count=True, sort=False)
     pipeline = compose(aggregate, sanitize)
 
     create_from_unordered(
@@ -445,14 +467,13 @@ def pairs(bins, pairs_path, cool_path, metadata, assembly, chunksize,
         metadata=metadata,
         assembly=assembly,
         mergebuf=chunksize,
+        max_merge=max_merge,
         temp_dir=temp_dir,
         delete_temp=not no_delete_temp,
         boundscheck=False,
         triucheck=False,
         dupcheck=False,
         ensure_sorted=False,
-        symmetric=use_symmetric_storage
+        symmetric=use_symmetric_storage,
+        h5opts=h5opts,
     )
-
-
-

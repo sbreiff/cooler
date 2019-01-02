@@ -1,65 +1,46 @@
 # -*- coding: utf-8 -*-
 from __future__ import division, print_function
-from scipy import sparse
 import numpy as np
-import pandas
-import h5py
+import pandas as pd
+from scipy import sparse
+from cooler.util import parse_region_string
+import cooler
+import pytest
 
-from nose.tools import assert_raises
-import cooler.core
 
+def test_region_string_parser():
+    # UCSC-style names
+    assert parse_region_string('chr21') == ('chr21', None, None)
+    assert parse_region_string('chr21:1000-2000') == ('chr21', 1000, 2000)
+    assert parse_region_string('chr21:1,000-2,000') == ('chr21', 1000, 2000)
 
-class MockCooler(dict):
-    pass
+    # Ensembl style names
+    assert parse_region_string('6') == ('6', None, None)
+    assert parse_region_string('6:1000-2000') == ('6', 1000, 2000)
+    assert parse_region_string('6:1,000-2,000') == ('6', 1000, 2000)
 
-binsize = 100
-n_bins = 20
-r = sparse.random(n_bins, n_bins, density=1, random_state=1)
-r = sparse.triu(r, k=1).tocsr()
-r_full = r.toarray() + r.toarray().T
+    # FASTA style names
+    assert parse_region_string('gb|accession|locus') == ('gb|accession|locus', None, None)
+    assert parse_region_string('gb|accession|locus:1000-2000') == ('gb|accession|locus', 1000, 2000)
+    assert parse_region_string('gb|accession|locus:1,000-2,000') == ('gb|accession|locus', 1000, 2000)
 
-mock_cooler = MockCooler({
-    'chroms': {
-        'name':   np.array(['chr1', 'chr2'], dtype='S'),
-        'length': np.array([1000, 1000], dtype=np.int32),
-    },
-    'bins': {
-        'chrom':    np.array([0,0,0,0,0,0,0,0,0,0,
-                              1,1,1,1,1,1,1,1,1,1], dtype=int),
-        'start':    np.array([0,100,200,300,400,500,600,700,800,900,
-                              0,100,200,300,400,500,600,700,800,900],
-                              dtype=int),
-        'end':      np.array([100,200,300,400,500,600,700,800,900,1000,
-                              100,200,300,400,500,600,700,800,900,1000],
-                              dtype=int),
-        'mask':     np.array([1,1,1,1,1,1,1,1,1,1,
-                              1,1,1,1,1,1,1,1,1,1], dtype=bool),
-        'bias':     np.array([1,1,1,1,1,1,1,1,1,1,
-                              1,1,1,1,1,1,1,1,1,1], dtype=float),
-        'E1':       np.zeros(20, dtype=float),
-    },
-    'pixels': {
-        'bin1_id':  r.tocoo().row,
-        'bin2_id':  r.indices,
-        'count':    r.data,
-        'mask':     np.ones(r.nnz, dtype=bool),
-    },
-    'indexes': {
-        'chrom_offset': np.array([0, 10, 20], dtype=np.int32),  # nchroms + 1
-        'bin1_offset':  r.indptr,  # nbins + 1
-    },
-})
+    # Punctuation in names (aside from :)
+    assert parse_region_string('name-with-hyphens-') == ('name-with-hyphens-', None, None)
+    assert parse_region_string('GL000207.1') == ('GL000207.1', None, None)
+    assert parse_region_string('GL000207.1:1000-2000') == ('GL000207.1', 1000, 2000)
 
-mock_cooler.attrs = {
-    'bin-size': binsize,
-    'bin-type': 'fixed',
-    'nchroms': 2,
-    'nbins': n_bins,
-    'nnz': r.nnz,
-    'metadata': '{}',
-}
+    # Trailing dash
+    assert parse_region_string('chr21:1000-') == ('chr21', 1000, None)
 
-chromID_lookup = pandas.Series({'chr1': 0, 'chr2': 1})
+    # Humanized units
+    assert parse_region_string('6:1kb-2kb') == ('6', 1000, 2000)
+    assert parse_region_string('6:1k-2000') == ('6', 1000, 2000)
+    assert parse_region_string('6:1kb-2M') == ('6', 1000, 2000000)
+    assert parse_region_string('6:1Gb-') == ('6', 1000000000, None)
+
+    with pytest.raises(ValueError):
+        parse_region_string('chr1:2,000-1,000')  # reverse selection
+        parse_region_string('chr1::1000-2000')  # more than one colon
 
 
 def test_selector1d():
@@ -76,8 +57,10 @@ def test_selector1d():
     assert s[:nmax] == (0, nmax)
     assert s[:-10] == (0, nmax-10)
     assert s[1:1] == (1, 1)
-    assert_raises(IndexError, lambda : s[:, :])
-    assert_raises(ValueError, lambda : s[::2])
+    with pytest.raises(IndexError):
+        s[:, :]
+    with pytest.raises(ValueError):
+        s[::2]
     #assert_raises(TypeError, lambda : s['blah'])
     assert s.shape == (nmax,)
 
@@ -98,12 +81,17 @@ def test_selector2d():
     assert s[30] == (30, 31, 0, nmax)
     assert s[10:20, 10:20] == (10, 20, 10, 20)
     assert s[:] == (0, nmax, 0, nmax)
-    assert_raises(IndexError, lambda : s[:, :, :])
-    assert_raises(ValueError, lambda : s[::2, :])
+    with pytest.raises(IndexError):
+        s[:, :, :]
+    with pytest.raises(ValueError):
+        s[::2, :]
     assert s.shape == (nmax, nmax)
 
 
-def test_region_to_extent():
+def test_region_to_extent(mock_cooler):
+    chromID_lookup = pd.Series({'chr1': 0, 'chr2': 1})
+    binsize = 100
+
     region = ('chr1', 159, 402)
     first, last = 1, 4
     assert cooler.api.region_to_extent(
@@ -119,7 +107,7 @@ def test_region_to_extent():
         mock_cooler, chromID_lookup, region, None) == (first, last+1)
 
 
-def test_slice_matrix():
+def test_slice_matrix(mock_cooler):
     slices = [
         (0, 10, 0, 10),
         (0, 10, 10, 20),
@@ -139,6 +127,9 @@ def test_slice_matrix():
         # rectangular query
         i, j, v = cooler.core.query_rect(triu_reader.query, i0, i1, j0, j1)
         mat = sparse.coo_matrix((v, (i-i0, j-j0)), (i1-i0, j1-j0)).toarray()
+        r = sparse.coo_matrix((
+            (mock_cooler['pixels/count'],
+            (mock_cooler['pixels/bin1_id'], mock_cooler['pixels/bin2_id']))
+        ), (mock_cooler.attrs['nbins'],) * 2)
+        r_full = r.toarray() + r.toarray().T
         assert np.allclose(r_full[i0:i1, j0:j1], mat)
-
-

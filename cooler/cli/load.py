@@ -9,14 +9,16 @@ from pandas.api.types import is_float_dtype
 import pandas as pd
 import h5py
 
-import click
+from ._util import parse_bins, parse_field_param
 from . import cli, get_logger
-from ._util import _parse_bins, _parse_field_params
+import click
+
 from .. import util
-from ..io import (
-    parse_cooler_uri, create_from_unordered, sanitize_records, sanitize_pixels
+from ..util import parse_cooler_uri
+from ..create import (
+    create_from_unordered, sanitize_records, sanitize_pixels,
+    BIN_DTYPE, COUNT_DTYPE
 )
-# TODO: support dense text or memmapped binary/npy?
 
 
 @cli.command()
@@ -47,11 +49,12 @@ from ..io import (
 @click.option(
     "--field",
     help="Add supplemental value fields or override default field numbers for "
-         "the specified format. Specify as '<name>,<number>' or as "
-         "'<name>,<number>,<dtype>' to enforce a dtype other than `float` or "
-         "the default for a standard column. Field numbers are 1-based. "
-         "Repeat the `--field` option for each additional field. "
-         "[Changed in v0.7.7: use a comma separator, rather than a space.]",
+         "the specified format. "
+         "Specify quantitative input fields to aggregate into value columns "
+         "using the syntax ``<field-name>=<field-number>``. Add "
+         "``,dtype=<dtype>`` to specify the dtype. Field numbers are 1-based. "
+         "Repeat the ``--field`` option for each additional field.",
+         #"[Changed in v0.7.7: use a comma separator, rather than a space.]",
     type=str,
     multiple=True)
 @click.option(
@@ -100,49 +103,47 @@ from ..io import (
          "This allows for distinct upper- and lower-triangle values",
     is_flag=True,
     default=False)
+@click.option(
+    "--storage-options",
+    help="Options to modify the data filter pipeline. Provide as a "
+         "comma-separated list of key-value pairs of the form 'k1=v1,k2=v2,...'. "
+         "See http://docs.h5py.org/en/stable/high/dataset.html#filter-pipeline "
+         "for more details.")
 def load(bins_path, pixels_path, cool_path, format, metadata, assembly,
          chunksize, field, count_as_float, one_based, comment_char,
-         symmetric_input, no_symmetric_storage):
+         symmetric_input, no_symmetric_storage, storage_options, **kwargs):
     """
-    Load a pre-binned contact matrix into a COOL file.
-
-    \b
-    Two input format options (tab-delimited):
-
-    * COO: COO-rdinate sparse matrix format (a.k.a. ijv triple). 3 columns.
-
-    \b
-    - columns: "bin1_id, bin2_id, count",
-
-    * BG2: 2D version of the bedGraph format. 7 columns.
-
-    \b
-    - columns: "chrom1, start1, end1, chrom2, start2, end2, count"
-
-    Input pixel file may be compressed.
-
-    **New in v0.7.7: Input files no longer need to be sorted or indexed!**
-
-    Example:
-
-    \b
-    cooler load -f bg2 <chrom.sizes>:<binsize> in.bg2.gz out.cool
-
-    \b\bArguments:
+    Create a cooler from a pre-binned matrix.
 
     BINS_PATH : One of the following
 
         <TEXT:INTEGER> : 1. Path to a chromsizes file, 2. Bin size in bp
+
         <TEXT> : Path to BED file defining the genomic bin segmentation.
 
     PIXELS_PATH : Text file containing nonzero pixel values. May be gzipped.
-                  Pass '-' to use stdin.
+    Pass '-' to use stdin.
 
     COOL_PATH : Output COOL file path or URI.
 
+    **Notes**
+
+    Two input format options (tab-delimited).
+    Input pixel file may be compressed.
+
+    COO: COO-rdinate sparse matrix format (a.k.a. ijv triple).
+    3 columns: "bin1_id, bin2_id, count",
+
+    BG2: 2D version of the bedGraph format.
+    7 columns: "chrom1, start1, end1, chrom2, start2, end2, count"
+
+    **Examples**
+
+    cooler load -f bg2 <chrom.sizes>:<binsize> in.bg2.gz out.cool
+
     """
     logger = get_logger(__name__)
-    chromsizes, bins = _parse_bins(bins_path)
+    chromsizes, bins = parse_bins(bins_path)
 
     use_symmetric_storage = not no_symmetric_storage
     tril_action = None
@@ -157,27 +158,41 @@ def load(bins_path, pixels_path, cool_path, format, metadata, assembly,
         with open(metadata, 'r') as f:
             metadata = json.load(f)
 
-    output_field_names = ['bin1_id', 'bin2_id', 'count']
+    # Initialize the output schema. We don't include 'count' yet.
+    output_field_names = ['bin1_id', 'bin2_id']
     output_field_dtypes = {
-        'bin1_id': int,
-        'bin2_id': int,
-        'count': float if count_as_float else int,
+        'bin1_id': BIN_DTYPE,
+        'bin2_id': BIN_DTYPE,
+        'count': COUNT_DTYPE
     }
 
+    # Initialize the input schema and create the input santizer.
     if format == 'bg2':
         input_field_names = [
-            'chrom1', 'start1', 'end1',
-            'chrom2', 'start2', 'end2',
-            'count'
+            'chrom1',
+            'start1',
+            'end1',
+            'chrom2',
+            'start2',
+            'end2',
+            # We don't include 'count' yet.
         ]
         input_field_dtypes = {
-            'chrom1': str, 'start1': int, 'end1': int,
-            'chrom2': str, 'start2': int, 'end2': int,
-            'count': float if count_as_float else int,
+            'chrom1': str,
+            'start1': int,
+            'end1': int,
+            'chrom2': str,
+            'start2': int,
+            'end2': int,
+            'count': output_field_dtypes['count'],
         }
         input_field_numbers = {
-            'chrom1': 0, 'start1': 1, 'end1': 2,
-            'chrom2': 3, 'start2': 4, 'end2': 5,
+            'chrom1': kwargs.get('chrom1', 0),
+            'start1': kwargs.get('start1', 1),
+            'end1':  kwargs.get('end1', 2),
+            'chrom2': kwargs.get('chrom2', 3),
+            'start2': kwargs.get('start2', 4),
+            'end2':  kwargs.get('end2', 5),
             'count': 6,
         }
         pipeline = sanitize_records(bins,
@@ -188,12 +203,14 @@ def load(bins_path, pixels_path, cool_path, format, metadata, assembly,
 
     elif format == 'coo':
         input_field_names = [
-            'bin1_id', 'bin2_id', 'count'
+            'bin1_id',
+            'bin2_id',
+            # We don't include 'count' yet.
         ]
         input_field_dtypes = {
             'bin1_id': int,
             'bin2_id': int,
-            'count': float if count_as_float else int,
+            'count': output_field_dtypes['count'],
         }
         input_field_numbers = {
             'bin1_id': 0,
@@ -205,25 +222,54 @@ def load(bins_path, pixels_path, cool_path, format, metadata, assembly,
             tril_action=tril_action,
             sort=True)
 
-    # include any additional value columns
+    # Include input value columns
     if len(field):
-        extra_fields = _parse_field_params(field)
-        for name, number, dtype in extra_fields:
-            if name == 'count' and count_as_float and not is_float_dtype(dtype):
-                raise ValueError(
-                    "Mismatch between --count-as-float and 'count' dtype "
-                    "'{}' provided via the --field option".format(dtype))
+        for arg in field:
+            name, colnum, dtype, _ = parse_field_param(arg, includes_agg=False)
+
+            # Special cases: omit field number to change standard dtypes.
+            if colnum is None:
+                if name in {'bin1_id', 'bin2_id'} and dtype is not None:
+                    # No input field
+                    output_field_dtypes[name] = dtype
+                    continue
+                elif name == 'count' and dtype is not None:
+                    input_field_names.append('count')
+                    output_field_names.append('count')
+                    input_field_dtypes[name] = dtype
+                    output_field_dtypes[name] = dtype
+                    continue
+                else:
+                    raise click.BadParameter(
+                        "A field number is required.", param_hint=arg)
 
             if name not in input_field_names:
                 input_field_names.append(name)
+
+            if name not in output_field_names:
                 output_field_names.append(name)
 
-            input_field_numbers[name] = number
+            input_field_numbers[name] = colnum
 
             if dtype is not None:
                 input_field_dtypes[name] = dtype
                 output_field_dtypes[name] = dtype
+    else:
+        # If no other fields are given, 'count' is implicitly included.
+        # Default dtype and field number are assumed.
+        input_field_names.append('count')
+        output_field_names.append('count')
 
+    # Customize the HDF5 filters
+    if storage_options is not None:
+        h5opts = _parse_kv_list_param(storage_options)
+        for key in h5opts:
+            if isinstance(h5opts[key], list):
+                h5opts[key] = tuple(h5opts[key])
+    else:
+        h5opts = None
+
+    # Initialize the input stream
     if pixels_path == '-':
         f_in = sys.stdin
     else:
@@ -255,5 +301,6 @@ def load(bins_path, pixels_path, cool_path, format, metadata, assembly,
         #boundscheck=True,
         #dupcheck=True,
         triucheck=True if use_symmetric_storage else False,
-        symmetric=use_symmetric_storage
+        symmetric=use_symmetric_storage,
+        h5opts=h5opts
     )

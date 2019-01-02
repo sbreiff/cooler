@@ -2,78 +2,102 @@
 from __future__ import division, print_function
 import logging
 import sys
-from .. import __version__, get_logger
+import os
+from .._version import __version__
+from .._logging import get_logger
 import click
-
 
 # Monkey patch
 click.core._verify_python3_env = lambda: None
-
-
-class UnsortedGroup(click.Group):
-    def list_commands(self, ctx):
-        return list(self.commands)
-
-    # def format_commands(self, ctx, formatter):
-    #     """Extra format methods for multi methods that adds all the commands
-    #     after the options.
-    #     """
-    #     commands = []
-    #     for subcommand in self.list_commands(ctx):
-    #         cmd = self.get_command(ctx, subcommand)
-    #         # What is this, the tool lied about a command.  Ignore it
-    #         if cmd is None:
-    #             continue
-    #         if cmd.hidden:
-    #             continue
-
-    #         commands.append((subcommand, cmd))
-
-    #     # allow for 3 times the default spacing
-    #     if len(commands):
-    #         limit = formatter.width - 6 - max(len(cmd[0]) for cmd in commands)
-
-    #         rows = []
-    #         for subcommand, cmd in commands:
-    #             help = cmd.get_short_help_str(limit)
-    #             rows.append((subcommand, help))
-
-    #         if rows:
-    #             with formatter.section('Commands'):
-    #                 formatter.write_dl(rows)
-
 
 
 CONTEXT_SETTINGS = {
     'help_option_names': ['-h', '--help'],
 }
 
+class UnsortedGroup(click.Group):
+    def list_commands(self, ctx):
+        return list(self.commands)
 
-@click.version_option(version=__version__)
+
+@click.version_option(__version__, '-V', '--version')
 @click.group(context_settings=CONTEXT_SETTINGS, cls=UnsortedGroup)
 @click.option(
-    '--debug/--no-debug',
-    help="Verbose logging",
-    default=False)
+    '-v', '--verbose',
+    help="Verbose logging.",
+    count=True)
 @click.option(
-    '-pm', '--post-mortem',
-    help="Post mortem debugging",
+    '-d', '--debug',
+    help="On error, drop into the post-mortem debugger shell.",
     is_flag=True,
     default=False)
-def cli(debug, post_mortem):
+def cli(verbose, debug):
     """
     Type -h or --help after any subcommand for more information.
 
     """
+    # Initialize logging to stderr
     logging.basicConfig(stream=sys.stderr)
     logging.captureWarnings(True)
     root_logger = get_logger()
-    if debug:
+
+    # Set verbosity level
+    if verbose > 0:
         root_logger.setLevel(logging.DEBUG)
+        if verbose > 1:
+            try:
+                import psutil
+                import atexit
+
+                @atexit.register
+                def process_dump_at_exit():
+                    process_attrs = [
+                        'cmdline',
+                        # 'connections',
+                        'cpu_affinity',
+                        'cpu_num',
+                        'cpu_percent',
+                        'cpu_times',
+                        'create_time',
+                        'cwd',
+                        # 'environ',
+                        'exe',
+                        # 'gids',
+                        'io_counters',
+                        'ionice',
+                        'memory_full_info',
+                        # 'memory_info',
+                        # 'memory_maps',
+                        'memory_percent',
+                        'name',
+                        'nice',
+                        'num_ctx_switches',
+                        'num_fds',
+                        'num_threads',
+                        'open_files',
+                        'pid',
+                        'ppid',
+                        'status',
+                        'terminal',
+                        'threads',
+                        # 'uids',
+                        'username',
+                    ]
+                    p = psutil.Process()
+                    info = p.as_dict(process_attrs, ad_value='')
+                    for key in process_attrs:
+                        root_logger.debug(
+                            "PSINFO:'{}': {}".format(key, info[key]))
+
+            except ImportError:
+                root_logger.warning(
+                    "Install psutil to see process information.")
+
     else:
         root_logger.setLevel(logging.INFO)
 
-    if post_mortem:
+    # Set hook for postmortem debugging
+    if debug:
         import traceback
         try:
             import ipdb as pdb
@@ -89,13 +113,13 @@ def cli(debug, post_mortem):
 from . import (
     cload,
     load,
-    info,
-    dump,
-    show,
-    balance,
     merge,
     coarsen,
     zoomify,
+    balance,
+    info,
+    dump,
+    show,
     makebins,
     digest,
     csort,
